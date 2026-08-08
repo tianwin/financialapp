@@ -1,6 +1,9 @@
+import html
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
+import altair as alt
+import certifi
 import pandas as pd
 import streamlit as st
 from bson import ObjectId
@@ -9,6 +12,440 @@ from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 
 
 st.set_page_config(page_title="Personal Finance", page_icon=":credit_card:", layout="wide")
+
+
+def apply_icost_theme():
+    st.markdown(
+        """
+        <style>
+        :root {
+            --icost-bg: #f5f5f7;
+            --icost-panel: #ffffff;
+            --icost-text: #111827;
+            --icost-muted: #8e8e93;
+            --icost-line: #e7e7ec;
+            --icost-blue: #007aff;
+            --icost-blue-soft: #eaf4ff;
+            --icost-red: #ff6b5f;
+            --icost-green: #55c78a;
+            --icost-yellow: #f7c948;
+        }
+
+        .stApp {
+            background: var(--icost-bg);
+            color: var(--icost-text);
+        }
+
+        header[data-testid="stHeader"],
+        [data-testid="stHeader"] {
+            background: var(--icost-bg) !important;
+            border-bottom: 1px solid var(--icost-line);
+        }
+
+        [data-testid="stToolbar"] {
+            background: transparent !important;
+            color: var(--icost-muted) !important;
+        }
+
+        [data-testid="stSidebar"] {
+            background: #fbfbfd;
+            border-right: 1px solid var(--icost-line);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+            color: var(--icost-muted);
+        }
+
+        .main .block-container {
+            max-width: 1180px;
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+        }
+
+        h1, h2, h3 {
+            color: var(--icost-text);
+            letter-spacing: 0;
+        }
+
+        h1 {
+            font-weight: 760;
+        }
+
+        h2, h3 {
+            font-weight: 700;
+        }
+
+        p, label, span {
+            letter-spacing: 0;
+        }
+
+        .icost-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            margin: 0 0 1.1rem 0;
+            padding: 1rem 1.1rem;
+            background: var(--icost-panel);
+            border: 1px solid var(--icost-line);
+            border-radius: 8px;
+            box-shadow: 0 10px 28px rgba(17, 24, 39, 0.06);
+        }
+
+        .icost-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            min-width: 0;
+        }
+
+        .icost-logo {
+            width: 44px;
+            height: 44px;
+            border-radius: 8px;
+            background: #000000;
+            color: #ffffff;
+            display: grid;
+            place-items: center;
+            font-size: 1.35rem;
+            font-weight: 800;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
+            flex: 0 0 auto;
+        }
+
+        .icost-kicker {
+            color: var(--icost-muted);
+            font-size: 0.82rem;
+            line-height: 1.1;
+            margin-bottom: 0.1rem;
+        }
+
+        .icost-title {
+            color: #000000;
+            font-size: clamp(1.6rem, 2.4vw, 2.2rem);
+            font-weight: 800;
+            line-height: 1.05;
+            margin: 0;
+        }
+
+        .icost-user {
+            color: var(--icost-blue);
+            background: var(--icost-blue-soft);
+            border: 1px solid #d5eaff;
+            border-radius: 8px;
+            padding: 0.45rem 0.7rem;
+            font-size: 0.9rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .icost-overview {
+            margin: 0.4rem 0 1rem 0;
+            padding: 1.1rem;
+            border-radius: 8px;
+            background: #ffffff;
+            border: 1px solid var(--icost-line);
+            box-shadow: 0 14px 36px rgba(17, 24, 39, 0.07);
+        }
+
+        .icost-overview-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1rem;
+        }
+
+        .icost-overview-label,
+        .icost-section-label {
+            color: #6b7280;
+            font-size: 0.88rem;
+            font-weight: 700;
+        }
+
+        .icost-overview-value {
+            margin-top: 0.25rem;
+            color: #000000;
+            font-size: clamp(2.4rem, 5vw, 4.2rem);
+            font-weight: 820;
+            line-height: 0.95;
+        }
+
+        .icost-overview-sub {
+            margin-top: 0.6rem;
+            color: #6b7280;
+            font-size: 0.96rem;
+            font-weight: 600;
+        }
+
+        .icost-pill {
+            color: var(--icost-blue);
+            background: var(--icost-blue-soft);
+            border: 1px solid #d5eaff;
+            border-radius: 8px;
+            padding: 0.5rem 0.7rem;
+            font-size: 0.9rem;
+            font-weight: 760;
+            white-space: nowrap;
+        }
+
+        .icost-kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.75rem;
+            margin: 0.85rem 0 1.1rem 0;
+        }
+
+        .icost-kpi {
+            background: #ffffff;
+            border: 1px solid var(--icost-line);
+            border-radius: 8px;
+            padding: 0.95rem;
+            min-height: 108px;
+            box-shadow: 0 8px 22px rgba(17, 24, 39, 0.05);
+        }
+
+        .icost-kpi-label {
+            color: #6b7280;
+            font-size: 0.84rem;
+            font-weight: 720;
+            margin-bottom: 0.45rem;
+        }
+
+        .icost-kpi-value {
+            color: #111827;
+            font-size: 1.55rem;
+            font-weight: 800;
+            line-height: 1;
+        }
+
+        .icost-kpi-note {
+            color: #8e8e93;
+            font-size: 0.78rem;
+            font-weight: 620;
+            margin-top: 0.55rem;
+        }
+
+        .icost-income {
+            color: var(--icost-green) !important;
+        }
+
+        .icost-expense {
+            color: var(--icost-red) !important;
+        }
+
+        .icost-chart-title {
+            color: #111827;
+            font-size: 1rem;
+            font-weight: 780;
+            margin: 0 0 0.45rem 0;
+        }
+
+        .icost-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+            margin-top: 0.35rem;
+        }
+
+        .icost-row {
+            display: grid;
+            grid-template-columns: 12px minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 0.75rem;
+            background: #ffffff;
+            border: 1px solid var(--icost-line);
+            border-radius: 8px;
+            padding: 0.75rem 0.85rem;
+        }
+
+        .icost-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 999px;
+            background: var(--icost-red);
+        }
+
+        .icost-dot.income {
+            background: var(--icost-green);
+        }
+
+        .icost-row-main {
+            min-width: 0;
+        }
+
+        .icost-row-title {
+            color: #111827;
+            font-size: 0.96rem;
+            font-weight: 760;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .icost-row-sub {
+            color: #8e8e93;
+            font-size: 0.82rem;
+            font-weight: 620;
+            margin-top: 0.12rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .icost-row-amount {
+            color: #111827;
+            font-size: 0.98rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        div[data-testid="stMetric"] {
+            background: var(--icost-panel);
+            border: 1px solid var(--icost-line);
+            border-radius: 8px;
+            padding: 1rem;
+            box-shadow: 0 8px 24px rgba(17, 24, 39, 0.05);
+        }
+
+        [data-testid="stMetricLabel"],
+        [data-testid="stMetricLabel"] * {
+            color: #6b7280 !important;
+            font-weight: 650;
+        }
+
+        [data-testid="stMetricValue"],
+        [data-testid="stMetricValue"] * {
+            color: var(--icost-text) !important;
+        }
+
+        [data-testid="stHorizontalBlock"] > div,
+        [data-testid="stForm"],
+        [data-testid="stDataFrameResizable"] {
+            border-radius: 8px;
+        }
+
+        [data-testid="stForm"] {
+            background: var(--icost-panel);
+            border: 1px solid var(--icost-line);
+            padding: 1rem;
+            box-shadow: 0 8px 24px rgba(17, 24, 39, 0.04);
+        }
+
+        [data-baseweb="tab-list"] {
+            gap: 0.25rem;
+            border-bottom: 1px solid var(--icost-line);
+        }
+
+        [data-baseweb="tab"] {
+            color: var(--icost-muted);
+            border-radius: 8px 8px 0 0;
+            font-weight: 650;
+        }
+
+        [data-baseweb="tab"][aria-selected="true"] {
+            color: var(--icost-blue);
+            background: var(--icost-panel);
+        }
+
+        .stButton > button,
+        .stDownloadButton > button,
+        [data-testid="stFormSubmitButton"] button {
+            border-radius: 8px;
+            border: 1px solid var(--icost-blue);
+            background: var(--icost-blue);
+            color: #ffffff;
+            font-weight: 700;
+        }
+
+        .stButton > button:hover,
+        .stDownloadButton > button:hover,
+        [data-testid="stFormSubmitButton"] button:hover {
+            border-color: #0062cc;
+            background: #006fe6;
+            color: #ffffff;
+        }
+
+        button[kind="secondary"] {
+            background: #ffffff !important;
+            color: var(--icost-blue) !important;
+            border-color: #cfe7ff !important;
+        }
+
+        [data-baseweb="input"],
+        [data-baseweb="select"],
+        [data-baseweb="textarea"] {
+            border-radius: 8px;
+        }
+
+        [data-testid="stAlert"] {
+            border-radius: 8px;
+            border: 1px solid var(--icost-line);
+        }
+
+        .stDataFrame,
+        [data-testid="stTable"] {
+            background: var(--icost-panel);
+            border-radius: 8px;
+        }
+
+        hr {
+            border-color: var(--icost-line);
+        }
+
+        @media (max-width: 700px) {
+            .main .block-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+
+            .icost-header {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .icost-user {
+                white-space: normal;
+            }
+
+            .icost-overview-top {
+                flex-direction: column;
+            }
+
+            .icost-kpi-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 460px) {
+            .icost-kpi-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_app_header(user):
+    st.markdown(
+        f"""
+        <div class="icost-header">
+            <div class="icost-brand">
+                <div class="icost-logo">$</div>
+                <div>
+                    <div class="icost-kicker">iCost style ledger</div>
+                    <div class="icost-title">Personal Finance</div>
+                </div>
+            </div>
+            <div class="icost-user">{user}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+apply_icost_theme()
 
 
 DEFAULT_ACCOUNTS = [
@@ -73,7 +510,7 @@ def get_database():
     if not uri:
         return None
 
-    client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+    client = MongoClient(uri, serverSelectionTimeoutMS=5000, tlsCAFile=certifi.where())
     client.admin.command("ping")
     return client[database_name]
 
@@ -367,9 +804,80 @@ def transaction_form(db, user, accounts, mode="create", transaction=None):
     return False
 
 
+def format_currency(value):
+    return f"${float(value):,.2f}"
+
+
+def render_dashboard_cards(total_balance, income, expenses, net, pending):
+    net_class = "icost-income" if net >= 0 else "icost-expense"
+    savings_rate = (net / income * 100) if income else 0
+    st.markdown(
+        f"""
+        <div class="icost-overview">
+            <div class="icost-overview-top">
+                <div>
+                    <div class="icost-overview-label">Estimated balance</div>
+                    <div class="icost-overview-value">{format_currency(total_balance)}</div>
+                    <div class="icost-overview-sub">This month net <span class="{net_class}">{format_currency(net)}</span></div>
+                </div>
+                <div class="icost-pill">{savings_rate:.0f}% savings rate</div>
+            </div>
+        </div>
+        <div class="icost-kpi-grid">
+            <div class="icost-kpi">
+                <div class="icost-kpi-label">Income</div>
+                <div class="icost-kpi-value icost-income">{format_currency(income)}</div>
+                <div class="icost-kpi-note">Money in this month</div>
+            </div>
+            <div class="icost-kpi">
+                <div class="icost-kpi-label">Expenses</div>
+                <div class="icost-kpi-value icost-expense">{format_currency(expenses)}</div>
+                <div class="icost-kpi-note">Spending this month</div>
+            </div>
+            <div class="icost-kpi">
+                <div class="icost-kpi-label">Net</div>
+                <div class="icost-kpi-value {net_class}">{format_currency(net)}</div>
+                <div class="icost-kpi-note">Income minus expenses</div>
+            </div>
+            <div class="icost-kpi">
+                <div class="icost-kpi-label">Reimbursement</div>
+                <div class="icost-kpi-value">{format_currency(pending)}</div>
+                <div class="icost-kpi-note">Waiting to be paid back</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_recent_transactions(frame):
+    rows = []
+    for _, row in frame.head(10).iterrows():
+        is_income = row["type"] == "income"
+        amount_prefix = "+" if is_income else "-"
+        amount_class = "icost-income" if is_income else "icost-expense"
+        dot_class = "income" if is_income else ""
+        title = html.escape(str(row.get("note") or row.get("category") or row.get("type")))
+        sub = html.escape(f"{row.get('date')} · {row.get('account')} · {row.get('category')}")
+        rows.append(
+            '<div class="icost-row">'
+            f'<div class="icost-dot {dot_class}"></div>'
+            '<div class="icost-row-main">'
+            f'<div class="icost-row-title">{title}</div>'
+            f'<div class="icost-row-sub">{sub}</div>'
+            '</div>'
+            f'<div class="icost-row-amount {amount_class}">{amount_prefix}{format_currency(row.get("amount", 0))}</div>'
+            '</div>'
+        )
+    st.markdown(
+        '<div class="icost-section-label">Recent transactions</div>'
+        f'<div class="icost-list">{"".join(rows)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def dashboard(db, user):
     frame = transaction_frame(db, user, include_id=False)
-    st.subheader("Dashboard")
 
     if frame.empty:
         st.info("No transactions yet. Add one manually or seed demo data.")
@@ -381,33 +889,60 @@ def dashboard(db, user):
     income = month_frame.loc[month_frame["type"] == "income", "amount"].sum()
     expenses = month_frame.loc[month_frame["type"] == "expense", "amount"].sum()
     pending = month_frame.loc[month_frame["status"] == "pending_reimbursement", "reimbursement_amount"].sum()
+    net = income - expenses
+    opening_balance = sum(item.get("opening_balance", 0.0) for item in db.accounts.find({"user": user}, {"opening_balance": 1}))
+    all_income = frame.loc[frame["type"] == "income", "amount"].sum()
+    all_expenses = frame.loc[frame["type"] == "expense", "amount"].sum()
+    total_balance = opening_balance + all_income - all_expenses
 
-    metric_a, metric_b, metric_c, metric_d = st.columns(4)
-    metric_a.metric("Monthly income", f"${income:,.2f}")
-    metric_b.metric("Monthly expenses", f"${expenses:,.2f}")
-    metric_c.metric("Net", f"${income - expenses:,.2f}")
-    metric_d.metric("Pending reimbursement", f"${pending:,.2f}")
+    render_dashboard_cards(total_balance, income, expenses, net, pending)
 
     chart_left, chart_right = st.columns(2, gap="large")
     with chart_left:
-        st.caption("Expense by category")
+        st.markdown('<div class="icost-chart-title">Expense by category</div>', unsafe_allow_html=True)
         category_data = (
             month_frame[month_frame["type"] == "expense"]
             .groupby("category", as_index=False)["amount"]
             .sum()
             .sort_values("amount", ascending=False)
         )
-        st.bar_chart(category_data, x="category", y="amount")
+        if category_data.empty:
+            st.info("No expenses this month.")
+        else:
+            category_chart = (
+                alt.Chart(category_data)
+                .mark_bar(cornerRadiusTopRight=6, cornerRadiusBottomRight=6, color="#ff6b5f")
+                .encode(
+                    x=alt.X("amount:Q", axis=alt.Axis(title=None, grid=True, labelColor="#8e8e93")),
+                    y=alt.Y("category:N", sort="-x", axis=alt.Axis(title=None, labelColor="#111827")),
+                    tooltip=["category:N", alt.Tooltip("amount:Q", format="$,.2f")],
+                )
+                .properties(height=310, background="#ffffff")
+                .configure_view(stroke=None)
+                .configure_axis(gridColor="#eef0f4", domain=False, tickColor="#eef0f4")
+            )
+            st.altair_chart(category_chart, use_container_width=True)
 
     with chart_right:
-        st.caption("Daily cashflow")
+        st.markdown('<div class="icost-chart-title">Daily cashflow</div>', unsafe_allow_html=True)
         daily = frame.copy()
         daily["signed_amount"] = daily.apply(lambda row: row["amount"] if row["type"] == "income" else -row["amount"], axis=1)
         daily = daily.groupby("date", as_index=False)["signed_amount"].sum().sort_values("date")
-        st.line_chart(daily, x="date", y="signed_amount")
+        cashflow_chart = (
+            alt.Chart(daily)
+            .mark_area(line={"color": "#007aff", "strokeWidth": 3}, color="#eaf4ff", opacity=0.85)
+            .encode(
+                x=alt.X("date:T", axis=alt.Axis(title=None, labelColor="#8e8e93", grid=False)),
+                y=alt.Y("signed_amount:Q", axis=alt.Axis(title=None, labelColor="#8e8e93", grid=True)),
+                tooltip=[alt.Tooltip("date:T", title="date"), alt.Tooltip("signed_amount:Q", title="cashflow", format="$,.2f")],
+            )
+            .properties(height=310, background="#ffffff")
+            .configure_view(stroke=None)
+            .configure_axis(gridColor="#eef0f4", domain=False, tickColor="#eef0f4")
+        )
+        st.altair_chart(cashflow_chart, use_container_width=True)
 
-    st.caption("Recent transactions")
-    st.dataframe(frame.head(12), use_container_width=True, hide_index=True)
+    render_recent_transactions(frame)
 
 
 def transaction_manager(db, user, accounts):
@@ -698,7 +1233,8 @@ def import_export_view(db, user, accounts):
 
 require_user()
 
-st.title("Personal Finance")
+user = current_user()
+render_app_header(user)
 
 try:
     db = get_database()
@@ -719,7 +1255,6 @@ database = "finance_app"
     st.stop()
 
 ensure_indexes(db)
-user = current_user()
 seed_defaults(db, user)
 accounts = get_accounts(db, user)
 
