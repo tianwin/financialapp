@@ -36,5 +36,6 @@ streamlit run streamlit_app.py
 To add demo records:
 
 ```bash
-python seed_demo_data.py
+python seed_demo_data.py tianwin
+python seed_demo_data.py meng
 ```
