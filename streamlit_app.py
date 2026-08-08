@@ -1,12 +1,11 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from io import StringIO
 
 import pandas as pd
 import streamlit as st
 from bson import ObjectId
 from pymongo import ASCENDING, DESCENDING, MongoClient
-from pymongo.errors import DuplicateKeyError, PyMongoError
+from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 
 
 st.set_page_config(page_title="Personal Finance", page_icon=":credit_card:", layout="wide")
@@ -14,8 +13,8 @@ st.set_page_config(page_title="Personal Finance", page_icon=":credit_card:", lay
 
 DEFAULT_ACCOUNTS = [
     {"name": "Cash", "type": "cash", "opening_balance": 300.0},
-    {"name": "Checking", "type": "bank", "opening_balance": 5200.0},
-    {"name": "Credit Card", "type": "credit", "opening_balance": -420.0},
+    {"name": "Checking", "type": "checking", "opening_balance": 5200.0},
+    {"name": "Credit Card", "type": "credit_card", "opening_balance": -420.0},
     {"name": "Savings", "type": "savings", "opening_balance": 12000.0},
 ]
 
@@ -34,6 +33,36 @@ DEFAULT_CATEGORIES = [
     {"name": "Interest", "type": "income"},
 ]
 
+ALLOWED_USERS = {"tianwin", "meng"}
+
+
+def require_user():
+    if st.session_state.get("authenticated_user") in ALLOWED_USERS:
+        with st.sidebar:
+            st.caption(f"Signed in as {st.session_state['authenticated_user']}")
+            if st.button("Sign out"):
+                st.session_state.pop("authenticated_user", None)
+                st.rerun()
+        return
+
+    st.title("Personal Finance")
+    st.subheader("Sign in")
+    with st.form("login_form"):
+        username = st.text_input("Username").strip().lower()
+        submitted = st.form_submit_button("Continue")
+
+    if submitted:
+        if username in ALLOWED_USERS:
+            st.session_state["authenticated_user"] = username
+            st.rerun()
+        st.error("Username is not allowed.")
+
+    st.stop()
+
+
+def current_user():
+    return st.session_state["authenticated_user"]
+
 
 @st.cache_resource
 def get_database():
@@ -49,14 +78,27 @@ def get_database():
     return client[database_name]
 
 
+def drop_index_if_exists(collection, index_name):
+    if index_name not in collection.index_information():
+        return
+    try:
+        collection.drop_index(index_name)
+    except OperationFailure:
+        pass
+
+
 def ensure_indexes(db):
-    db.transactions.create_index([("date", DESCENDING), ("created_at", DESCENDING)])
-    db.transactions.create_index([("type", ASCENDING), ("category", ASCENDING)])
-    db.transactions.create_index([("status", ASCENDING)])
-    db.accounts.create_index("name", unique=True)
-    db.categories.create_index([("type", ASCENDING), ("name", ASCENDING)], unique=True)
-    db.budgets.create_index([("month", ASCENDING), ("category", ASCENDING)], unique=True)
-    db.recurring_rules.create_index([("active", ASCENDING), ("next_date", ASCENDING)])
+    drop_index_if_exists(db.accounts, "name_1")
+    drop_index_if_exists(db.categories, "type_1_name_1")
+    drop_index_if_exists(db.budgets, "month_1_category_1")
+
+    db.transactions.create_index([("user", ASCENDING), ("date", DESCENDING), ("created_at", DESCENDING)])
+    db.transactions.create_index([("user", ASCENDING), ("type", ASCENDING), ("category", ASCENDING)])
+    db.transactions.create_index([("user", ASCENDING), ("status", ASCENDING)])
+    db.accounts.create_index([("user", ASCENDING), ("name", ASCENDING)], unique=True)
+    db.categories.create_index([("user", ASCENDING), ("type", ASCENDING), ("name", ASCENDING)], unique=True)
+    db.budgets.create_index([("user", ASCENDING), ("month", ASCENDING), ("category", ASCENDING)], unique=True)
+    db.recurring_rules.create_index([("user", ASCENDING), ("active", ASCENDING), ("next_date", ASCENDING)])
 
 
 def money_to_float(value):
@@ -88,24 +130,24 @@ def month_key(value):
     return value.strftime("%Y-%m")
 
 
-def seed_defaults(db):
+def seed_defaults(db, user):
     for account in DEFAULT_ACCOUNTS:
         db.accounts.update_one(
-            {"name": account["name"]},
-            {"$setOnInsert": {**account, "created_at": datetime.utcnow()}},
+            {"user": user, "name": account["name"]},
+            {"$setOnInsert": {**account, "user": user, "created_at": datetime.utcnow()}},
             upsert=True,
         )
 
     for category in DEFAULT_CATEGORIES:
         db.categories.update_one(
-            {"type": category["type"], "name": category["name"]},
-            {"$setOnInsert": category},
+            {"user": user, "type": category["type"], "name": category["name"]},
+            {"$setOnInsert": {**category, "user": user}},
             upsert=True,
         )
 
 
-def seed_demo_data(db):
-    if db.transactions.count_documents({"source": "demo"}) > 0:
+def seed_demo_data(db, user):
+    if db.transactions.count_documents({"user": user, "source": "demo"}) > 0:
         return 0
 
     today = date.today()
@@ -141,6 +183,7 @@ def seed_demo_data(db):
                 "reimbursement_amount": round(amount * 0.8, 2) if status == "pending_reimbursement" else 0.0,
                 "tags": ["demo"],
                 "source": "demo",
+                "user": user,
                 "created_at": datetime.utcnow(),
             }
         )
@@ -159,6 +202,7 @@ def seed_demo_data(db):
                 "reimbursement_amount": 0.0,
                 "tags": ["demo"],
                 "source": "demo",
+                "user": user,
                 "created_at": datetime.utcnow(),
             }
         )
@@ -175,6 +219,7 @@ def seed_demo_data(db):
             "reimbursement_amount": 0.0,
             "tags": ["demo", "refund"],
             "source": "demo",
+            "user": user,
             "created_at": datetime.utcnow(),
         }
     )
@@ -191,16 +236,17 @@ def seed_demo_data(db):
     ]
     for budget in budgets:
         db.budgets.update_one(
-            {"month": budget["month"], "category": budget["category"]},
-            {"$set": budget},
+            {"user": user, "month": budget["month"], "category": budget["category"]},
+            {"$set": {**budget, "user": user}},
             upsert=True,
         )
 
     db.recurring_rules.update_one(
-        {"name": "Monthly rent"},
+        {"user": user, "name": "Monthly rent"},
         {
             "$set": {
                 "name": "Monthly rent",
+                "user": user,
                 "type": "expense",
                 "amount": 1850.0,
                 "account": "Checking",
@@ -216,18 +262,21 @@ def seed_demo_data(db):
     return len(records)
 
 
-def get_accounts(db):
-    return [item["name"] for item in db.accounts.find({}, {"name": 1}).sort("name", ASCENDING)]
+def get_accounts(db, user):
+    return [item["name"] for item in db.accounts.find({"user": user}, {"name": 1}).sort("name", ASCENDING)]
 
 
-def get_categories(db, category_type=None):
-    query = {"type": category_type} if category_type else {}
+def get_categories(db, user, category_type=None):
+    query = {"user": user}
+    if category_type:
+        query["type"] = category_type
     return [item["name"] for item in db.categories.find(query, {"name": 1}).sort("name", ASCENDING)]
 
 
-def transaction_frame(db, query=None, limit=1000, include_id=True):
+def transaction_frame(db, user, query=None, limit=1000, include_id=True):
+    query = {**(query or {}), "user": user}
     projection = None if include_id else {"_id": 0}
-    rows = list(db.transactions.find(query or {}, projection).sort("date", DESCENDING).limit(limit))
+    rows = list(db.transactions.find(query, projection).sort("date", DESCENDING).limit(limit))
     if not rows:
         return pd.DataFrame()
 
@@ -254,22 +303,23 @@ def transaction_frame(db, query=None, limit=1000, include_id=True):
     return frame[[column for column in preferred if column in frame.columns]]
 
 
-def save_transaction(db, payload, transaction_id=None):
+def save_transaction(db, user, payload, transaction_id=None):
+    payload["user"] = user
     payload["updated_at"] = datetime.utcnow()
     if transaction_id:
-        db.transactions.update_one({"_id": ObjectId(transaction_id)}, {"$set": payload})
+        db.transactions.update_one({"_id": ObjectId(transaction_id), "user": user}, {"$set": payload})
         return
     payload["created_at"] = datetime.utcnow()
     db.transactions.insert_one(payload)
 
 
-def transaction_form(db, accounts, mode="create", transaction=None):
+def transaction_form(db, user, accounts, mode="create", transaction=None):
     tx = transaction or {}
     default_type = tx.get("type", "expense")
     type_index = ["expense", "income", "transfer"].index(default_type) if default_type in ["expense", "income", "transfer"] else 0
     tx_type = st.radio("Type", ["expense", "income", "transfer"], index=type_index, horizontal=True, key=f"{mode}_type")
 
-    category_options = get_categories(db, tx_type) if tx_type != "transfer" else ["Transfer"]
+    category_options = get_categories(db, user, tx_type) if tx_type != "transfer" else ["Transfer"]
     if not category_options:
         category_options = ["Uncategorized"]
 
@@ -311,14 +361,14 @@ def transaction_form(db, accounts, mode="create", transaction=None):
             "tags": [item.strip() for item in tags.split(",") if item.strip()],
             "note": note.strip(),
         }
-        save_transaction(db, payload, tx.get("id"))
+        save_transaction(db, user, payload, tx.get("id"))
         st.success("Transaction saved.")
         return True
     return False
 
 
-def dashboard(db):
-    frame = transaction_frame(db, include_id=False)
+def dashboard(db, user):
+    frame = transaction_frame(db, user, include_id=False)
     st.subheader("Dashboard")
 
     if frame.empty:
@@ -360,9 +410,9 @@ def dashboard(db):
     st.dataframe(frame.head(12), use_container_width=True, hide_index=True)
 
 
-def transaction_manager(db, accounts):
+def transaction_manager(db, user, accounts):
     st.subheader("Transactions")
-    frame = transaction_frame(db)
+    frame = transaction_frame(db, user)
     if frame.empty:
         st.info("No transactions yet.")
         return
@@ -373,7 +423,7 @@ def transaction_manager(db, accounts):
     with filters[1]:
         account_filter = st.selectbox("Account filter", ["all"] + accounts)
     with filters[2]:
-        category_filter = st.selectbox("Category filter", ["all"] + get_categories(db))
+        category_filter = st.selectbox("Category filter", ["all"] + get_categories(db, user))
     with filters[3]:
         status_filter = st.selectbox("Status filter", ["all", "cleared", "pending", "pending_reimbursement", "reimbursed", "refund"])
 
@@ -397,21 +447,21 @@ def transaction_manager(db, accounts):
 
     edit_col, delete_col = st.columns([3, 1])
     with edit_col:
-        if transaction_form(db, accounts, mode="edit", transaction=selected):
+        if transaction_form(db, user, accounts, mode="edit", transaction=selected):
             st.rerun()
     with delete_col:
         st.write("")
         st.write("")
         if st.button("Delete transaction", type="secondary"):
-            db.transactions.delete_one({"_id": ObjectId(selected_id)})
+            db.transactions.delete_one({"_id": ObjectId(selected_id), "user": user})
             st.success("Transaction deleted.")
             st.rerun()
 
 
-def budgets_view(db):
+def budgets_view(db, user):
     st.subheader("Budgets")
     selected_month = st.text_input("Budget month", value=date.today().strftime("%Y-%m"))
-    expense_categories = get_categories(db, "expense")
+    expense_categories = get_categories(db, user, "expense")
 
     with st.form("budget_form", clear_on_submit=True):
         category = st.selectbox("Category", expense_categories)
@@ -422,19 +472,19 @@ def budgets_view(db):
         parsed_amount = money_to_float(amount)
         if parsed_amount:
             db.budgets.update_one(
-                {"month": selected_month, "category": category},
-                {"$set": {"month": selected_month, "category": category, "amount": parsed_amount}},
+                {"user": user, "month": selected_month, "category": category},
+                {"$set": {"user": user, "month": selected_month, "category": category, "amount": parsed_amount}},
                 upsert=True,
             )
             st.success("Budget saved.")
             st.rerun()
 
-    budgets = pd.DataFrame(list(db.budgets.find({"month": selected_month}, {"_id": 0})))
+    budgets = pd.DataFrame(list(db.budgets.find({"user": user, "month": selected_month}, {"_id": 0, "user": 0})))
     if budgets.empty:
         st.info("No budgets set for this month.")
         return
 
-    tx = transaction_frame(db, include_id=False)
+    tx = transaction_frame(db, user, include_id=False)
     if tx.empty:
         budgets["spent"] = 0.0
     else:
@@ -451,14 +501,14 @@ def budgets_view(db):
     st.dataframe(budgets, use_container_width=True, hide_index=True)
 
 
-def recurring_view(db, accounts):
+def recurring_view(db, user, accounts):
     st.subheader("Recurring")
     with st.form("recurring_form", clear_on_submit=True):
         name = st.text_input("Name")
         tx_type = st.radio("Recurring type", ["expense", "income"], horizontal=True)
         amount = st.number_input("Amount", min_value=0.0, step=1.0, format="%.2f")
         account = st.selectbox("Account", accounts)
-        category = st.selectbox("Category", get_categories(db, tx_type))
+        category = st.selectbox("Category", get_categories(db, user, tx_type))
         frequency = st.selectbox("Frequency", ["weekly", "monthly", "yearly"])
         next_date = st.date_input("Next date", value=date.today())
         note = st.text_input("Note")
@@ -468,10 +518,11 @@ def recurring_view(db, accounts):
         parsed_amount = money_to_float(amount)
         if parsed_amount and name.strip():
             db.recurring_rules.update_one(
-                {"name": name.strip()},
+                {"user": user, "name": name.strip()},
                 {
                     "$set": {
                         "name": name.strip(),
+                        "user": user,
                         "type": tx_type,
                         "amount": parsed_amount,
                         "account": account,
@@ -487,7 +538,7 @@ def recurring_view(db, accounts):
             st.success("Recurring rule saved.")
             st.rerun()
 
-    rows = list(db.recurring_rules.find({}, {"_id": 0}).sort("next_date", ASCENDING))
+    rows = list(db.recurring_rules.find({"user": user}, {"_id": 0, "user": 0}).sort("next_date", ASCENDING))
     if rows:
         frame = pd.DataFrame(rows)
         frame["next_date"] = pd.to_datetime(frame["next_date"]).dt.date
@@ -496,13 +547,13 @@ def recurring_view(db, accounts):
         st.info("No recurring rules yet.")
 
 
-def accounts_categories_view(db):
+def accounts_categories_view(db, user):
     account_tab, category_tab = st.tabs(["Accounts", "Categories"])
 
     with account_tab:
         with st.form("account_form", clear_on_submit=True):
             name = st.text_input("Account name")
-            account_type = st.selectbox("Account type", ["cash", "bank", "credit", "savings", "investment", "loan"])
+            account_type = st.selectbox("Account type", ["checking", "credit_card", "savings", "cash", "investment", "loan"])
             opening_balance = st.number_input("Opening balance", step=100.0, format="%.2f")
             submitted = st.form_submit_button("Add account")
         if submitted and name.strip():
@@ -510,6 +561,7 @@ def accounts_categories_view(db):
                 db.accounts.insert_one(
                     {
                         "name": name.strip(),
+                        "user": user,
                         "type": account_type,
                         "opening_balance": float(opening_balance),
                         "created_at": datetime.utcnow(),
@@ -519,7 +571,64 @@ def accounts_categories_view(db):
                 st.rerun()
             except DuplicateKeyError:
                 st.error("That account already exists.")
-        st.dataframe(pd.DataFrame(list(db.accounts.find({}, {"_id": 0}))), use_container_width=True, hide_index=True)
+
+        account_docs = list(db.accounts.find({"user": user}).sort("name", ASCENDING))
+        if account_docs:
+            st.divider()
+            st.caption("Edit account")
+            account_names = [item["name"] for item in account_docs]
+            selected_name = st.selectbox("Existing account", account_names)
+            selected_account = next(item for item in account_docs if item["name"] == selected_name)
+            account_type_options = ["checking", "credit_card", "savings", "cash", "investment", "loan"]
+            selected_type = selected_account.get("type", "checking")
+            selected_type_index = account_type_options.index(selected_type) if selected_type in account_type_options else 0
+
+            with st.form("edit_account_form"):
+                new_name = st.text_input("Display name", value=selected_account["name"])
+                new_type = st.selectbox("Type", account_type_options, index=selected_type_index)
+                new_opening_balance = st.number_input(
+                    "Opening balance",
+                    step=100.0,
+                    format="%.2f",
+                    value=float(selected_account.get("opening_balance", 0.0)),
+                    key="edit_opening_balance",
+                )
+                update_submitted = st.form_submit_button("Update account")
+
+            if update_submitted:
+                clean_name = new_name.strip()
+                if not clean_name:
+                    st.error("Account name cannot be empty.")
+                else:
+                    old_name = selected_account["name"]
+                    try:
+                        db.accounts.update_one(
+                            {"_id": selected_account["_id"], "user": user},
+                            {
+                                "$set": {
+                                    "name": clean_name,
+                                    "type": new_type,
+                                    "opening_balance": float(new_opening_balance),
+                                    "updated_at": datetime.utcnow(),
+                                }
+                            },
+                        )
+                        if clean_name != old_name:
+                            db.transactions.update_many(
+                                {"user": user, "account": old_name},
+                                {"$set": {"account": clean_name}},
+                            )
+                            db.recurring_rules.update_many(
+                                {"user": user, "account": old_name},
+                                {"$set": {"account": clean_name}},
+                            )
+                        st.success("Account updated.")
+                        st.rerun()
+                    except DuplicateKeyError:
+                        st.error("That account name already exists.")
+
+        display_accounts = pd.DataFrame(list(db.accounts.find({"user": user}, {"_id": 0, "user": 0})))
+        st.dataframe(display_accounts, use_container_width=True, hide_index=True)
 
     with category_tab:
         with st.form("category_form", clear_on_submit=True):
@@ -528,17 +637,17 @@ def accounts_categories_view(db):
             submitted = st.form_submit_button("Add category")
         if submitted and name.strip():
             try:
-                db.categories.insert_one({"name": name.strip(), "type": category_type})
+                db.categories.insert_one({"name": name.strip(), "type": category_type, "user": user})
                 st.success("Category added.")
                 st.rerun()
             except DuplicateKeyError:
                 st.error("That category already exists.")
-        st.dataframe(pd.DataFrame(list(db.categories.find({}, {"_id": 0}))), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(list(db.categories.find({"user": user}, {"_id": 0, "user": 0}))), use_container_width=True, hide_index=True)
 
 
-def import_export_view(db, accounts):
+def import_export_view(db, user, accounts):
     st.subheader("Import / Export")
-    frame = transaction_frame(db)
+    frame = transaction_frame(db, user)
     export_frame = frame.drop(columns=["id"], errors="ignore")
     st.download_button(
         "Download CSV",
@@ -572,6 +681,7 @@ def import_export_view(db, accounts):
                             "tags": [item.strip() for item in str(row.get("tags", "")).split(",") if item.strip()],
                             "note": str(row.get("note", "")),
                             "source": "csv",
+                            "user": user,
                             "created_at": datetime.utcnow(),
                         }
                     )
@@ -581,10 +691,12 @@ def import_export_view(db, accounts):
                     st.rerun()
 
     if st.button("Seed demo data"):
-        count = seed_demo_data(db)
+        count = seed_demo_data(db, user)
         st.success(f"Added {count} demo transactions." if count else "Demo data already exists.")
         st.rerun()
 
+
+require_user()
 
 st.title("Personal Finance")
 
@@ -607,30 +719,31 @@ database = "finance_app"
     st.stop()
 
 ensure_indexes(db)
-seed_defaults(db)
-accounts = get_accounts(db)
+user = current_user()
+seed_defaults(db, user)
+accounts = get_accounts(db, user)
 
 tabs = st.tabs(["Dashboard", "Add", "Transactions", "Budgets", "Recurring", "Accounts", "Import / Export"])
 
 with tabs[0]:
-    dashboard(db)
+    dashboard(db, user)
 
 with tabs[1]:
     st.subheader("New Transaction")
-    if transaction_form(db, accounts):
+    if transaction_form(db, user, accounts):
         st.rerun()
 
 with tabs[2]:
-    transaction_manager(db, accounts)
+    transaction_manager(db, user, accounts)
 
 with tabs[3]:
-    budgets_view(db)
+    budgets_view(db, user)
 
 with tabs[4]:
-    recurring_view(db, accounts)
+    recurring_view(db, user, accounts)
 
 with tabs[5]:
-    accounts_categories_view(db)
+    accounts_categories_view(db, user)
 
 with tabs[6]:
-    import_export_view(db, accounts)
+    import_export_view(db, user, accounts)
