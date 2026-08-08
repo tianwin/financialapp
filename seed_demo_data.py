@@ -1,8 +1,12 @@
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import re
+import sys
 
 from pymongo import MongoClient
+
+
+ALLOWED_USERS = {"tianwin", "meng"}
 
 
 def read_local_secret():
@@ -18,12 +22,21 @@ def read_local_secret():
     return uri_match.group(1), db_match.group(1) if db_match else "finance_app"
 
 
+def read_user():
+    if len(sys.argv) < 2:
+        raise SystemExit("Usage: python seed_demo_data.py <tianwin|meng>")
+    user = sys.argv[1].strip().lower()
+    if user not in ALLOWED_USERS:
+        raise SystemExit("User must be one of: tianwin, meng")
+    return user
+
+
 def to_datetime(value):
     return datetime.combine(value, datetime.min.time())
 
 
-def seed_demo_data(db):
-    if db.transactions.count_documents({"source": "demo"}) > 0:
+def seed_demo_data(db, user):
+    if db.transactions.count_documents({"user": user, "source": "demo"}) > 0:
         return 0
 
     today = date.today()
@@ -59,6 +72,7 @@ def seed_demo_data(db):
                 "reimbursement_amount": round(amount * 0.8, 2) if status == "pending_reimbursement" else 0.0,
                 "tags": ["demo"],
                 "source": "demo",
+                "user": user,
                 "created_at": datetime.utcnow(),
             }
         )
@@ -77,6 +91,7 @@ def seed_demo_data(db):
                 "reimbursement_amount": 0.0,
                 "tags": ["demo"],
                 "source": "demo",
+                "user": user,
                 "created_at": datetime.utcnow(),
             }
         )
@@ -93,6 +108,7 @@ def seed_demo_data(db):
             "reimbursement_amount": 0.0,
             "tags": ["demo", "refund"],
             "source": "demo",
+            "user": user,
             "created_at": datetime.utcnow(),
         }
     )
@@ -101,16 +117,20 @@ def seed_demo_data(db):
 
     for account in [
         {"name": "Cash", "type": "cash", "opening_balance": 300.0},
-        {"name": "Checking", "type": "bank", "opening_balance": 5200.0},
-        {"name": "Credit Card", "type": "credit", "opening_balance": -420.0},
+        {"name": "Checking", "type": "checking", "opening_balance": 5200.0},
+        {"name": "Credit Card", "type": "credit_card", "opening_balance": -420.0},
         {"name": "Savings", "type": "savings", "opening_balance": 12000.0},
     ]:
-        db.accounts.update_one({"name": account["name"]}, {"$setOnInsert": account}, upsert=True)
+        db.accounts.update_one(
+            {"user": user, "name": account["name"]},
+            {"$setOnInsert": {**account, "user": user}},
+            upsert=True,
+        )
 
     for category in ["Food", "Transport", "Shopping", "Entertainment", "Utilities"]:
         db.budgets.update_one(
-            {"month": today.strftime("%Y-%m"), "category": category},
-            {"$set": {"month": today.strftime("%Y-%m"), "category": category, "amount": 500.0}},
+            {"user": user, "month": today.strftime("%Y-%m"), "category": category},
+            {"$set": {"user": user, "month": today.strftime("%Y-%m"), "category": category, "amount": 500.0}},
             upsert=True,
         )
 
@@ -119,7 +139,8 @@ def seed_demo_data(db):
 
 if __name__ == "__main__":
     uri, database_name = read_local_secret()
+    user = read_user()
     client = MongoClient(uri, serverSelectionTimeoutMS=5000)
     client.admin.command("ping")
-    count = seed_demo_data(client[database_name])
-    print(f"seeded={count}")
+    count = seed_demo_data(client[database_name], user)
+    print(f"user={user} seeded={count}")
